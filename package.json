@@ -1,0 +1,27 @@
+{
+  "name": "pi-productivity",
+  "version": "0.1.0",
+  "description": "Pi extension for ambitious human-model collaboration (Depth, Breadth, and Horizon workflows inspired by Felix Rieseberg)",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/p3psi-boo/pi-productivity.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
