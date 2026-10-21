@@ -1,5 +1,5 @@
 /**
- * Ambition Extension — Depth (Toggle) + Breadth & Horizon (One-Shot Prompts)
+ * Ambition Extension — Depth (Toggle) + Breadth & Horizon (One-Shot Sections)
  *
  * Operationalizes the three dimensions from Felix Rieseberg's
  * "How to be more ambitious: A tutorial for humans with models":
@@ -7,14 +7,22 @@
  * 1. Depth (`Alt+D` or `/depth` persistent toggle):
  *    Multi-turn quality bar — inspect rawest material, 4-line framing
  *    ([Gap], [Raw], [Method], [Judge]), and run an Outside Judge via bash.
- * 2. Breadth (`/breadth <task>` one-shot hidden prompt):
+ * 2. Breadth (`/breadth <task>` one-shot system-prompt section):
  *    Explore 3 orthogonal hypotheses/approaches ([Space], [Disqualifier],
  *    [Sweep], [Pick]), run fast disqualifiers, and sweep the whole repo.
- *    Automatically expires after the current agent run finishes.
- * 3. Horizon (`/horizon <task>` one-shot hidden prompt):
+ *    Applies to the next run only.
+ * 3. Horizon (`/horizon <task>` one-shot system-prompt section):
  *    Autonomous end-to-end loop ([Finish Line], [Self-Check Loop],
  *    [Boundaries], [Stop Condition]) — iterate until verified without
- *    stopping halfway to ask permission. Automatically expires on agent_end.
+ *    stopping halfway to ask permission. Applies to the next run only.
+ *
+ * Protocols are delivered through `before_agent_start` by mutating
+ * `event.systemPromptOptions.sections`. Pi renders each section once per
+ * request as `<section-name>…</section-name>` and patches only the sections
+ * that changed, so a long-lived toggle costs one copy instead of one copy per
+ * turn, and survives compaction. Older releases injected hidden custom
+ * messages instead; a `context` handler still strips those legacy messages
+ * from resumed sessions.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -26,6 +34,13 @@ export type DepthCommandAction =
 	| { type: "run"; task: string };
 
 export type OneShotDimension = "breadth" | "horizon";
+
+/** System prompt section names. Pi requires /^[a-z][a-z0-9_-]*$/ and rejects "preamble". */
+export const SECTION_NAMES: Record<"depth" | OneShotDimension, string> = {
+	depth: "depth",
+	breadth: "breadth",
+	horizon: "horizon",
+};
 
 export const DEPTH_PROTOCOL_RULES = [
 	"[DEPTH MODE ACTIVE — Switch methods, not just vocabulary]",
@@ -80,6 +95,44 @@ export function buildHorizonProtocol(): string {
 	return HORIZON_PROTOCOL_RULES.join("\n");
 }
 
+export function buildOneShotProtocol(dimension: OneShotDimension): string {
+	return dimension === "breadth" ? buildBreadthProtocol() : buildHorizonProtocol();
+}
+
+export interface ProtocolState {
+	/** Persistent Depth toggle. */
+	depthEnabled: boolean;
+	/** One-shot dimension armed for the next run, if any. */
+	oneShot: OneShotDimension | null;
+}
+
+/**
+ * Write the active protocols into a system prompt `sections` map.
+ *
+ * Returns the one-shot dimension that this call applied, so the caller can
+ * disarm it. Applying a one-shot is idempotent: the caller disarms it after the
+ * run starts, which is what makes the protocol one-shot.
+ */
+export function applyProtocolSections(
+	sections: Record<string, string>,
+	state: ProtocolState,
+): OneShotDimension | null {
+	if (state.depthEnabled) {
+		sections[SECTION_NAMES.depth] = buildDepthProtocol();
+	} else {
+		delete sections[SECTION_NAMES.depth];
+	}
+
+	if (state.oneShot) {
+		sections[SECTION_NAMES[state.oneShot]] = buildOneShotProtocol(state.oneShot);
+		return state.oneShot;
+	}
+
+	delete sections[SECTION_NAMES.breadth];
+	delete sections[SECTION_NAMES.horizon];
+	return null;
+}
+
 export function parseDepthArgs(argsRaw: string): DepthCommandAction {
 	const trimmed = argsRaw.trim();
 	if (!trimmed) {
@@ -111,9 +164,12 @@ export function resolveOneShotTask(argsRaw: string, editorText = ""): { task: st
 	return null;
 }
 
+/** Custom message types written by releases that injected hidden messages. */
+const LEGACY_PROTOCOL_TYPES = new Set(["depth-protocol", "breadth-protocol", "horizon-protocol"]);
+
 export default function depthExtension(pi: ExtensionAPI): void {
 	let enabled = false;
-	let activeOneShot: OneShotDimension | null = null;
+	let pendingOneShot: OneShotDimension | null = null;
 
 	function persistState(): void {
 		pi.appendEntry("depth-state", { enabled });
@@ -160,13 +216,8 @@ export default function depthExtension(pi: ExtensionAPI): void {
 			ctx.ui.setEditorText("");
 		}
 
-		activeOneShot = dimension;
-		pi.sendMessage({
-			customType: `${dimension}-protocol`,
-			content: dimension === "breadth" ? buildBreadthProtocol() : buildHorizonProtocol(),
-			display: false,
-		});
-
+		// Armed here, consumed by the very next run in before_agent_start.
+		pendingOneShot = dimension;
 		dispatchUserTask(ctx, resolved.task);
 	}
 
@@ -187,34 +238,26 @@ export default function depthExtension(pi: ExtensionAPI): void {
 		updateStatus(ctx);
 	});
 
-	// Inject the Depth Protocol when Depth toggle is enabled
-	pi.on("before_agent_start", async () => {
-		if (!enabled) return;
-
-		return {
-			message: {
-				customType: "depth-protocol",
-				content: buildDepthProtocol(),
-				display: false,
-			},
-		};
+	// Deliver protocols as system prompt sections for this request only
+	pi.on("before_agent_start", async (event) => {
+		const sections = event.systemPromptOptions.sections;
+		const consumed = applyProtocolSections(sections, { depthEnabled: enabled, oneShot: pendingOneShot });
+		if (consumed) {
+			pendingOneShot = null;
+		}
 	});
 
-	// Expire one-shot Breadth/Horizon protocol after the agent finishes the run
-	pi.on("agent_end", async () => {
-		activeOneShot = null;
-	});
-
-	// Strip inactive protocol messages so they never pollute subsequent turns
+	// Strip legacy hidden protocol messages so resumed sessions stay clean
 	pi.on("context", async (event) => {
-		return {
-			messages: event.messages.filter((m: any) => {
-				if (m.customType === "depth-protocol" && !enabled) return false;
-				if (m.customType === "breadth-protocol" && activeOneShot !== "breadth") return false;
-				if (m.customType === "horizon-protocol" && activeOneShot !== "horizon") return false;
-				return true;
-			}),
-		};
+		let changed = false;
+		const messages = event.messages.filter((m: any) => {
+			if (!LEGACY_PROTOCOL_TYPES.has(m?.customType)) return true;
+			// Keep legacy depth messages only while Depth is still enabled.
+			const keep = m.customType === "depth-protocol" && enabled;
+			if (!keep) changed = true;
+			return keep;
+		});
+		return changed ? { messages } : undefined;
 	});
 
 	// /depth command: persistent toggle, on/off, or enable + run task immediately
@@ -246,7 +289,7 @@ export default function depthExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	// /breadth command: one-shot hidden prompt for orthogonal exploration & repo-wide sweep
+	// /breadth command: one-shot system-prompt section for orthogonal exploration & repo-wide sweep
 	pi.registerCommand("breadth", {
 		description: "Run a task with Breadth framing (explore 3 orthogonal options, run disqualifiers, sweep repo)",
 		handler: async (args, ctx) => {
@@ -254,7 +297,7 @@ export default function depthExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	// /horizon command: one-shot hidden prompt for end-to-end autonomous self-checking loops
+	// /horizon command: one-shot system-prompt section for end-to-end autonomous self-checking loops
 	pi.registerCommand("horizon", {
 		description: "Run a task with Horizon framing (define finish line & self-check loop, iterate until done)",
 		handler: async (args, ctx) => {

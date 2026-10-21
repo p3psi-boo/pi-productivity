@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import depthExtension, {
+	applyProtocolSections,
 	buildBreadthProtocol,
 	buildDepthProtocol,
 	buildHorizonProtocol,
@@ -64,6 +65,43 @@ describe("protocol builders", () => {
 		expect(protocol).toContain("[Self-Check Loop]");
 		expect(protocol).toContain("[Boundaries]");
 		expect(protocol).toContain("[Stop Condition]");
+	});
+});
+
+describe("applyProtocolSections", () => {
+	test("writes the depth section only while depth is enabled", () => {
+		const sections: Record<string, string> = {};
+
+		applyProtocolSections(sections, { depthEnabled: true, oneShot: null });
+		expect(sections.depth).toBe(buildDepthProtocol());
+
+		applyProtocolSections(sections, { depthEnabled: false, oneShot: null });
+		expect(sections.depth).toBeUndefined();
+	});
+
+	test("applies a one-shot section once and reports which one was consumed", () => {
+		const sections: Record<string, string> = {};
+
+		const consumed = applyProtocolSections(sections, { depthEnabled: false, oneShot: "breadth" });
+		expect(consumed).toBe("breadth");
+		expect(sections.breadth).toBe(buildBreadthProtocol());
+		expect(sections.horizon).toBeUndefined();
+
+		// Caller disarms; the next request carries no protocol section.
+		applyProtocolSections(sections, { depthEnabled: false, oneShot: null });
+		expect(sections.breadth).toBeUndefined();
+		expect(sections.horizon).toBeUndefined();
+	});
+
+	test("keeps only one copy of the depth section across repeated requests", () => {
+		const sections: Record<string, string> = {};
+
+		for (let i = 0; i < 25; i++) {
+			applyProtocolSections(sections, { depthEnabled: true, oneShot: null });
+		}
+
+		expect(Object.keys(sections)).toEqual(["depth"]);
+		expect(sections.depth.split("[DEPTH MODE ACTIVE").length).toBe(2);
 	});
 });
 
@@ -135,84 +173,107 @@ function createMockPi() {
 	};
 }
 
+/** Minimal before_agent_start event with a mutable sections map. */
+function createBeforeAgentStartEvent(sections: Record<string, string> = {}, prompt = "task") {
+	return {
+		type: "before_agent_start",
+		messageType: "user",
+		prompt,
+		systemPrompt: "",
+		systemPromptOptions: { sections },
+	};
+}
+
 describe("depthExtension", () => {
-	test("Alt+D and /depth toggle persistent Depth mode on and off", async () => {
+	test("Alt+D and /depth toggle a persistent system prompt section", async () => {
 		const pi = createMockPi();
 		depthExtension(pi as never);
 		const ctx = createMockContext();
+		const sections: Record<string, string> = {};
 
-		expect(await pi.handlers.before_agent_start[0]({}, ctx)).toBeUndefined();
+		expect(await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx)).toBeUndefined();
+		expect(sections.depth).toBeUndefined();
 
 		// Toggle ON via Alt+D
 		await pi.shortcuts["alt+d"].handler(ctx);
 		expect(ctx.statusMap.depth).toBe("⛰️ depth");
 
-		const injected = await pi.handlers.before_agent_start[0]({}, ctx);
-		expect(injected?.message?.customType).toBe("depth-protocol");
-		expect(injected?.message?.display).toBe(false);
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx);
+		expect(sections.depth).toBe(buildDepthProtocol());
 
-		// Toggle OFF via /depth
+		// Toggle OFF via /depth: the section is removed on the next request
 		await pi.commands.depth.handler("", ctx);
 		expect(ctx.statusMap.depth).toBeUndefined();
-		expect(await pi.handlers.before_agent_start[0]({}, ctx)).toBeUndefined();
 
-		// Context handler strips stale depth-protocol messages when disabled
-		const filtered = await pi.handlers.context[0]({
-			messages: [
-				{ role: "user", content: "hello" },
-				{ customType: "depth-protocol", content: "stale" },
-			],
-		});
-		expect(filtered.messages).toEqual([{ role: "user", content: "hello" }]);
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx);
+		expect(sections.depth).toBeUndefined();
 	});
 
-	test("/breadth and /horizon inject hidden one-shot protocols and auto-expire on agent_end", async () => {
+	test("enabled depth never accumulates hidden messages in the transcript", async () => {
+		const pi = createMockPi();
+		depthExtension(pi as never);
+		const ctx = createMockContext();
+		const sections: Record<string, string> = {};
+
+		await pi.commands.depth.handler("on", ctx);
+		for (let i = 0; i < 10; i++) {
+			await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx);
+		}
+
+		expect(pi.sentMessages).toHaveLength(0);
+		expect(sections.depth.split("[DEPTH MODE ACTIVE").length).toBe(2);
+	});
+
+	test("/breadth and /horizon apply a one-shot section to the next run only", async () => {
 		const pi = createMockPi();
 		depthExtension(pi as never);
 		const ctx = createMockContext(true);
+		const sections: Record<string, string> = {};
 
 		// 1. Trigger /breadth <task>
 		await pi.commands.breadth.handler("why is websocket reconnecting", ctx);
-		expect(pi.sentMessages).toHaveLength(1);
-		expect(pi.sentMessages[0].message.customType).toBe("breadth-protocol");
-		expect(pi.sentMessages[0].message.display).toBe(false);
+		expect(pi.sentMessages).toHaveLength(0);
 		expect(pi.sentUserMessages[0].content).toBe("why is websocket reconnecting");
 
-		// While the current agent run is active, breadth-protocol stays in context
-		const duringRun = await pi.handlers.context[0]({
-			messages: [
-				{ customType: "breadth-protocol", content: buildBreadthProtocol() },
-				{ role: "user", content: "why is websocket reconnecting" },
-			],
-		});
-		expect(duringRun.messages).toHaveLength(2);
+		// The armed section lands on the run started by that task...
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "why is websocket reconnecting"), ctx);
+		expect(sections.breadth).toBe(buildBreadthProtocol());
 
-		// Once agent_end fires, breadth-protocol is stripped on subsequent turns
-		await pi.handlers.agent_end[0]({}, ctx);
-		const afterRun = await pi.handlers.context[0]({
-			messages: [
-				{ customType: "breadth-protocol", content: buildBreadthProtocol() },
-				{ role: "user", content: "why is websocket reconnecting" },
-				{ role: "user", content: "now rename that variable" },
-			],
-		});
-		expect(afterRun.messages).toEqual([
-			{ role: "user", content: "why is websocket reconnecting" },
-			{ role: "user", content: "now rename that variable" },
-		]);
+		// ...and the following turn carries nothing.
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "now rename that variable"), ctx);
+		expect(sections.breadth).toBeUndefined();
+		expect(sections.horizon).toBeUndefined();
 
 		// 2. Trigger /horizon using editor draft text
 		const draftCtx = createMockContext(true, "migrate all tests to bun:test");
 		await pi.commands.horizon.handler("", draftCtx);
 		expect(draftCtx.editorText).toBe("");
-		expect(pi.sentMessages[1].message.customType).toBe("horizon-protocol");
 		expect(pi.sentUserMessages[1].content).toBe("migrate all tests to bun:test");
+
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), draftCtx);
+		expect(sections.horizon).toBe(buildHorizonProtocol());
+		expect(sections.breadth).toBeUndefined();
+	});
+
+	test("one-shot framing works while depth stays enabled", async () => {
+		const pi = createMockPi();
+		depthExtension(pi as never);
+		const ctx = createMockContext(true);
+		const sections: Record<string, string> = {};
+
+		await pi.commands.depth.handler("on", ctx);
+		await pi.commands.breadth.handler("find the root cause", ctx);
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx);
+
+		expect(sections.depth).toBe(buildDepthProtocol());
+		expect(sections.breadth).toBe(buildBreadthProtocol());
 	});
 
 	test("restores enabled state from session_start entries", async () => {
 		const pi = createMockPi();
 		depthExtension(pi as never);
 		const ctx = createMockContext();
+		const sections: Record<string, string> = {};
 
 		await pi.handlers.session_start[0](
 			{ entries: [{ customType: "depth-state", data: { enabled: true } }] },
@@ -220,5 +281,41 @@ describe("depthExtension", () => {
 		);
 
 		expect(ctx.statusMap.depth).toBe("⛰️ depth");
+
+		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections), ctx);
+		expect(sections.depth).toBe(buildDepthProtocol());
+	});
+
+	test("strips legacy hidden protocol messages from resumed sessions", async () => {
+		const pi = createMockPi();
+		depthExtension(pi as never);
+		const ctx = createMockContext();
+		const ctxHandler = pi.handlers.context[0];
+
+		// Depth disabled: legacy depth + one-shot protocols are dropped.
+		const stripped = await ctxHandler(
+			{
+				messages: [
+					{ role: "user", content: "hello" },
+					{ customType: "depth-protocol", content: "stale" },
+					{ customType: "breadth-protocol", content: "stale" },
+				],
+			},
+			ctx,
+		);
+		expect(stripped.messages).toEqual([{ role: "user", content: "hello" }]);
+
+		// Depth enabled: a legacy depth message is kept, one-shots are still dropped.
+		await pi.commands.depth.handler("on", ctx);
+		const kept = await ctxHandler(
+			{
+				messages: [
+					{ customType: "depth-protocol", content: "legacy" },
+					{ customType: "horizon-protocol", content: "stale" },
+				],
+			},
+			ctx,
+		);
+		expect(kept.messages).toEqual([{ customType: "depth-protocol", content: "legacy" }]);
 	});
 });
