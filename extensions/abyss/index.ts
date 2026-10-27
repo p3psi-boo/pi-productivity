@@ -33,6 +33,34 @@ export const ABYSS_SECTION_NAMES: Record<AbyssWorkflow, string> = {
 	impl: "impl",
 };
 
+/** EventBus discovery channel registered by `pi-subagent-manager` when active. */
+export const SUBAGENT_CAPABILITY_PROBE_CHANNEL = "pi-subagent-manager:capabilities:probe";
+
+export function isSubagentManagerLoaded(pi: { events?: { emit?: (channel: string, payload: unknown) => void } }): boolean {
+	let active = false;
+	pi.events?.emit?.(SUBAGENT_CAPABILITY_PROBE_CHANNEL, {
+		respond: () => {
+			active = true;
+		},
+	});
+	return active;
+}
+
+/**
+ * Mount `pi-subagent-manager` into the current extension runtime unless another
+ * instance is already active in this session.
+ */
+export function mountSubagentManagerIfNeeded(
+	pi: ExtensionAPI,
+	mount: (pi: ExtensionAPI) => void,
+): boolean {
+	if (isSubagentManagerLoaded(pi as any)) {
+		return false;
+	}
+	mount(pi);
+	return true;
+}
+
 /** Canonical independent-root subagent paths (`/` prefix = shared workspace, no inherited history). */
 export const ABYSS_SUBAGENT_PATHS = {
 	proposalReviewer: "/abyss-proposal-review",

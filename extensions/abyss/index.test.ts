@@ -6,7 +6,10 @@ import abyssExtension, {
 	buildImplProtocol,
 	buildProposalProtocol,
 	IMPL_REVIEW_ASPECTS,
+	isSubagentManagerLoaded,
+	mountSubagentManagerIfNeeded,
 	parseAbyssCommandArgs,
+	SUBAGENT_CAPABILITY_PROBE_CHANNEL,
 } from "./index";
 
 describe("parseAbyssCommandArgs", () => {
@@ -279,5 +282,41 @@ describe("abyssExtension", () => {
 
 		expect(sections.depth).toBe(buildDepthProtocol());
 		expect(sections.impl).toBe(buildImplProtocol());
+	});
+
+	test("mountSubagentManagerIfNeeded mounts once and skips when capability probe responds", () => {
+		const listeners = new Map<string, Array<(payload: any) => void>>();
+		const pi = {
+			...createMockPi(),
+			events: {
+				on(channel: string, fn: (payload: any) => void) {
+					const list = listeners.get(channel) ?? [];
+					list.push(fn);
+					listeners.set(channel, list);
+				},
+				emit(channel: string, payload: any) {
+					for (const fn of listeners.get(channel) ?? []) {
+						fn(payload);
+					}
+				},
+			},
+		};
+
+		let mountCount = 0;
+		const fakeSubagentManager = (api: any) => {
+			mountCount++;
+			api.events.on(SUBAGENT_CAPABILITY_PROBE_CHANNEL, (payload: any) => {
+				payload?.respond?.({ version: "1.1.0", protocol: 1 });
+			});
+		};
+
+		expect(isSubagentManagerLoaded(pi)).toBe(false);
+		expect(mountSubagentManagerIfNeeded(pi as never, fakeSubagentManager)).toBe(true);
+		expect(mountCount).toBe(1);
+		expect(isSubagentManagerLoaded(pi)).toBe(true);
+
+		// Second call detects existing instance and skips duplicate mount
+		expect(mountSubagentManagerIfNeeded(pi as never, fakeSubagentManager)).toBe(false);
+		expect(mountCount).toBe(1);
 	});
 });
