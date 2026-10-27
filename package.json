@@ -1,7 +1,7 @@
 {
   "name": "pi-productivity",
   "version": "0.1.0",
-  "description": "Pi extension for ambitious human-model collaboration (Depth, Breadth, and Horizon workflows inspired by Felix Rieseberg)",
+  "description": "Pi extensions for ambitious human-model collaboration (Depth, Breadth, Horizon) and Abyss multi-session subagent orchestration (Proposal, Impl)",
   "license": "MIT",
   "type": "module",
   "repository": {
