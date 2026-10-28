@@ -1,129 +1,134 @@
 import { describe, expect, test } from "bun:test";
-import depthExtension, { buildDepthProtocol } from "../depth/index";
-import abyssExtension, {
-	ABYSS_SUBAGENT_PATHS,
-	applyAbyssSections,
-	buildImplProtocol,
-	buildProposalProtocol,
-	IMPL_REVIEW_ASPECTS,
+import soloWorkflowsExtension, { buildDebugProtocol, buildTddProtocol } from "../depth/index";
+import orchestratedWorkflowsExtension, {
+	applyOrchestratedSections,
+	buildDeliverProtocol,
+	buildDesignProtocol,
+	DELIVER_REVIEW_ASPECTS,
 	isSubagentManagerLoaded,
 	mountSubagentManagerIfNeeded,
-	parseAbyssCommandArgs,
+	parseOrchestratedCommandArgs,
 	SUBAGENT_CAPABILITY_PROBE_CHANNEL,
+	SUBAGENT_PATHS,
 } from "./index";
 
-describe("parseAbyssCommandArgs", () => {
-	test("parses proposal and impl subcommands with inline task", () => {
-		expect(parseAbyssCommandArgs("proposal design a file-sharing service")).toEqual({
+describe("parseOrchestratedCommandArgs", () => {
+	test("parses design and deliver subcommands with inline task", () => {
+		expect(parseOrchestratedCommandArgs("design a file-sharing service")).toEqual({
 			type: "run",
-			workflow: "proposal",
-			task: "design a file-sharing service",
+			workflow: "design",
+			task: "a file-sharing service",
 		});
 
-		expect(parseAbyssCommandArgs("impl .context/proposals/260403-file-sharing.md")).toEqual({
+		expect(parseOrchestratedCommandArgs("deliver .context/proposals/260403-file-sharing.md")).toEqual({
 			type: "run",
-			workflow: "impl",
+			workflow: "deliver",
 			task: ".context/proposals/260403-file-sharing.md",
 		});
 	});
 
-	test("accepts workflow:proposal and workflow:impl prefixes", () => {
-		expect(parseAbyssCommandArgs("workflow:proposal add download limits")).toEqual({
+	test("accepts workflow:design and workflow:deliver prefixes", () => {
+		expect(parseOrchestratedCommandArgs("workflow:design add download limits")).toEqual({
 			type: "run",
-			workflow: "proposal",
+			workflow: "design",
 			task: "add download limits",
 		});
 
-		expect(parseAbyssCommandArgs("workflow:impl implement token expiry")).toEqual({
+		expect(parseOrchestratedCommandArgs("workflow:deliver implement token expiry")).toEqual({
 			type: "run",
-			workflow: "impl",
+			workflow: "deliver",
 			task: "implement token expiry",
 		});
 	});
 
 	test("falls back to editor draft when only workflow name is given", () => {
-		expect(parseAbyssCommandArgs("proposal", "draft from editor")).toEqual({
+		expect(parseOrchestratedCommandArgs("design", "draft from editor")).toEqual({
 			type: "run",
-			workflow: "proposal",
+			workflow: "design",
 			task: "draft from editor",
 		});
 	});
 
 	test("returns invalid action for missing task or unknown workflow", () => {
-		expect(parseAbyssCommandArgs("proposal", "   ")).toEqual({
+		expect(parseOrchestratedCommandArgs("design", "   ")).toEqual({
 			type: "invalid",
 			reason: "missing_task",
-			workflow: "proposal",
+			workflow: "design",
 		});
-		expect(parseAbyssCommandArgs("")).toEqual({
+		expect(parseOrchestratedCommandArgs("")).toEqual({
 			type: "invalid",
 			reason: "unknown_workflow",
 		});
-		expect(parseAbyssCommandArgs("unknown task")).toEqual({
+		expect(parseOrchestratedCommandArgs("unknown task")).toEqual({
 			type: "invalid",
 			reason: "unknown_workflow",
 		});
 	});
 });
 
-describe("Abyss protocol builders", () => {
-	test("buildProposalProtocol encodes Mei persona, anti-bloat rules, and clean-slate review subagent", () => {
-		const protocol = buildProposalProtocol();
-		expect(protocol).toContain("[ABYSS PROPOSAL WORKFLOW");
+describe("Orchestrated protocol builders", () => {
+	test("buildDesignProtocol encodes Foundational Thinking, domain architecture, and clean-slate complexity review", () => {
+		const protocol = buildDesignProtocol();
+		expect(protocol).toContain("[DESIGN WORKFLOW");
 		expect(protocol).toContain("Persona Mei");
+		expect(protocol).toContain("Get the data shape right before logic");
+		expect(protocol).toContain("Subtract Before You Add");
+		expect(protocol).toContain("Laziness Protocol");
 		expect(protocol).toContain(".context/proposals/YYMMDD-<slug>.md");
-		expect(protocol).toContain(ABYSS_SUBAGENT_PATHS.proposalReviewer);
+		expect(protocol).toContain(SUBAGENT_PATHS.designReviewer);
 		expect(protocol).toContain("agent_spawn");
 		expect(protocol).toContain("agent_stop");
-		expect(protocol).toContain("overengineered");
 	});
 
-	test("buildImplProtocol encodes Coordinator rules, 1 implementer + 5 orthogonal reviewers, and P0-P3 loop", () => {
-		const protocol = buildImplProtocol();
-		expect(protocol).toContain("[ABYSS IMPL WORKFLOW");
-		expect(protocol).toContain(ABYSS_SUBAGENT_PATHS.implementer);
-		expect(protocol).toContain("Persona Elysia");
-		expect(protocol).toContain("Persona Eden");
+	test("buildDeliverProtocol encodes Coordinator rules, First Make it Work implementer, and 5 Then Make it Right reviewers", () => {
+		const protocol = buildDeliverProtocol();
+		expect(protocol).toContain("[DELIVER WORKFLOW");
+		expect(protocol).toContain(SUBAGENT_PATHS.implementer);
+		expect(protocol).toContain("First Make it Work");
+		expect(protocol).toContain("CRAP 10");
+		expect(protocol).toContain("structural duplication");
+		expect(protocol).toContain("Test Behavior, Not Implementation");
+		expect(protocol).toContain("surviving mutants");
 		expect(protocol).toContain("agent_steer");
 		expect(protocol).toContain(".context/impl/YYMMDD-<slug>.md");
 
-		expect(IMPL_REVIEW_ASPECTS).toHaveLength(5);
-		for (const aspect of IMPL_REVIEW_ASPECTS) {
+		expect(DELIVER_REVIEW_ASPECTS).toHaveLength(5);
+		for (const aspect of DELIVER_REVIEW_ASPECTS) {
 			expect(protocol).toContain(aspect.id);
 			expect(protocol).toContain(aspect.path);
 		}
 	});
 });
 
-describe("applyAbyssSections", () => {
-	test("applies proposal or impl section once and reports consumed workflow", () => {
+describe("applyOrchestratedSections", () => {
+	test("applies design or deliver section once and reports consumed workflow", () => {
 		const sections: Record<string, string> = {};
 
-		const consumed = applyAbyssSections(sections, { oneShot: "proposal", messageType: "user" });
-		expect(consumed).toBe("proposal");
-		expect(sections.proposal).toBe(buildProposalProtocol());
-		expect(sections.impl).toBeUndefined();
+		const consumed = applyOrchestratedSections(sections, { oneShot: "design", messageType: "user" });
+		expect(consumed).toBe("design");
+		expect(sections.design).toBe(buildDesignProtocol());
+		expect(sections.deliver).toBeUndefined();
 
 		// Preserves section on custom subagent wake turns during the workflow
 		expect(
-			applyAbyssSections(sections, {
+			applyOrchestratedSections(sections, {
 				oneShot: null,
-				activeForCustomWake: "proposal",
+				activeForCustomWake: "design",
 				messageType: "custom",
 			}),
 		).toBeNull();
-		expect(sections.proposal).toBe(buildProposalProtocol());
+		expect(sections.design).toBe(buildDesignProtocol());
 
 		// Clears on next normal user turn
 		expect(
-			applyAbyssSections(sections, {
+			applyOrchestratedSections(sections, {
 				oneShot: null,
-				activeForCustomWake: "proposal",
+				activeForCustomWake: "design",
 				messageType: "user",
 			}),
 		).toBeNull();
-		expect(sections.proposal).toBeUndefined();
-		expect(sections.impl).toBeUndefined();
+		expect(sections.design).toBeUndefined();
+		expect(sections.deliver).toBeUndefined();
 	});
 });
 
@@ -204,35 +209,35 @@ function createBeforeAgentStartEvent(
 	};
 }
 
-describe("abyssExtension", () => {
-	test("/proposal and /impl arm one-shot sections, survive custom subagent wakes, and clear on next user turn", async () => {
+describe("orchestratedWorkflowsExtension", () => {
+	test("/design and /deliver arm one-shot sections, survive custom subagent wakes, and clear on next user turn", async () => {
 		const pi = createMockPi();
-		abyssExtension(pi as never);
+		orchestratedWorkflowsExtension(pi as never);
 		const ctx = createMockContext(true);
 		const sections: Record<string, string> = {};
 
-		// 1. Trigger /proposal <task>
-		await pi.commands.proposal.handler("design file sharing service", ctx);
+		// 1. Trigger /design <task>
+		await pi.commands.design.handler("design file sharing service", ctx);
 		expect(pi.sentUserMessages[0]).toEqual({
 			content: "design file sharing service",
 			options: undefined,
 		});
 
 		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "user"), ctx);
-		expect(sections.proposal).toBe(buildProposalProtocol());
-		expect(sections.impl).toBeUndefined();
+		expect(sections.design).toBe(buildDesignProtocol());
+		expect(sections.deliver).toBeUndefined();
 
 		// Subagent async wake turn (messageType === "custom") keeps the active workflow section
 		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "custom"), ctx);
-		expect(sections.proposal).toBe(buildProposalProtocol());
+		expect(sections.design).toBe(buildDesignProtocol());
 
 		// Next user message clears the workflow section
 		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "user"), ctx);
-		expect(sections.proposal).toBeUndefined();
+		expect(sections.design).toBeUndefined();
 
-		// 2. Trigger /impl using editor draft when busy
+		// 2. Trigger /deliver using editor draft when busy
 		const busyCtx = createMockContext(false, "implement .context/proposals/260403-sharing.md");
-		await pi.commands.impl.handler("", busyCtx);
+		await pi.commands.deliver.handler("", busyCtx);
 		expect(busyCtx.editorText).toBe("");
 		expect(pi.sentUserMessages[1]).toEqual({
 			content: "implement .context/proposals/260403-sharing.md",
@@ -240,48 +245,31 @@ describe("abyssExtension", () => {
 		});
 
 		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "user"), busyCtx);
-		expect(sections.impl).toBe(buildImplProtocol());
-		expect(sections.proposal).toBeUndefined();
+		expect(sections.deliver).toBe(buildDeliverProtocol());
+		expect(sections.design).toBeUndefined();
 
 		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "user"), busyCtx);
-		expect(sections.impl).toBeUndefined();
+		expect(sections.deliver).toBeUndefined();
 	});
 
-	test("/abyss command dispatches proposal and impl workflows and validates usage", async () => {
+	test("coexists cleanly with soloWorkflowsExtension on the same sections map", async () => {
 		const pi = createMockPi();
-		abyssExtension(pi as never);
+		soloWorkflowsExtension(pi as never);
+		orchestratedWorkflowsExtension(pi as never);
 		const ctx = createMockContext(true);
 		const sections: Record<string, string> = {};
 
-		await pi.commands.abyss.handler("", ctx);
-		expect(ctx.notifications[0]?.message).toContain("Usage: /abyss <proposal|impl> <task>");
-
-		await pi.commands.abyss.handler("proposal", ctx);
-		expect(ctx.notifications[1]?.message).toContain("Usage: /abyss proposal <task>");
-
-		await pi.commands.abyss.handler("workflow:impl add expiry check", ctx);
-		expect(pi.sentUserMessages[0]?.content).toBe("add expiry check");
-
-		await pi.handlers.before_agent_start[0](createBeforeAgentStartEvent(sections, "user"), ctx);
-		expect(sections.impl).toBe(buildImplProtocol());
-	});
-
-	test("coexists cleanly with depthExtension on the same sections map", async () => {
-		const pi = createMockPi();
-		depthExtension(pi as never);
-		abyssExtension(pi as never);
-		const ctx = createMockContext(true);
-		const sections: Record<string, string> = {};
-
-		await pi.commands.depth.handler("on", ctx);
-		await pi.commands.impl.handler("implement feature", ctx);
+		await pi.commands.debug.handler("on", ctx);
+		await pi.commands.tdd.handler("on", ctx);
+		await pi.commands.deliver.handler("implement feature", ctx);
 
 		for (const handler of pi.handlers.before_agent_start) {
 			await handler(createBeforeAgentStartEvent(sections, "user"), ctx);
 		}
 
-		expect(sections.depth).toBe(buildDepthProtocol());
-		expect(sections.impl).toBe(buildImplProtocol());
+		expect(sections.debug).toBe(buildDebugProtocol());
+		expect(sections.tdd).toBe(buildTddProtocol());
+		expect(sections.deliver).toBe(buildDeliverProtocol());
 	});
 
 	test("mountSubagentManagerIfNeeded mounts once and skips when capability probe responds", () => {

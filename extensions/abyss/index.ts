@@ -1,36 +1,46 @@
 /**
- * Abyss Extension — Multi-Session Subagent Orchestration (`proposal` & `impl`)
+ * Multi-Session Subagent Orchestration Extension (`/design` & `/deliver`)
  *
- * Adapts the two core workflows from BeautyyuYanli/abyss into zero-ceremony
- * Pi system-prompt sections backed by `pi-subagent-manager`:
+ * Combines Abyss multi-session orchestration (`BeautyyuYanli/abyss`) with
+ * Uncle Bob's `ub-mode` engineering & quality-gate principles, backed by
+ * `pi-subagent-manager`:
  *
- * 1. Proposal (`/proposal <task>` one-shot section `<proposal>`):
- *    Drafts `.context/proposals/YYMMDD-<slug>.md` with Mei's research & anti-bloat
- *    constraints, spawns a clean-slate `/abyss-proposal-review` subagent (`history: none`,
- *    shared workspace) solely to strip overengineering, simplifies in place, and delivers.
+ * 1. Design (`/design <task>` one-shot section `<design>`):
+ *    Drafts `.context/proposals/YYMMDD-<slug>.md` with Mei's evidence-first
+ *    research, `ub-mode` Foundational Thinking & Domain Architecture (data
+ *    shape first, illegal states unrepresentable, boundary parsing + pure
+ *    core functions, idempotency, state isolation), spawns a clean-slate
+ *    `/abyss-proposal-review` subagent (`history: none`, shared workspace)
+ *    to apply Subtract Before You Add & Laziness Protocol, simplifies in
+ *    place, and delivers.
  *
- * 2. Impl (`/impl <task>` one-shot section `<impl>`):
- *    Coordinator-driven implementation loop. Delegates coding to `/abyss-implementer`
- *    (Elysia), fans out 5 orthogonal blind review subagents in parallel (`code-hygiene`,
- *    `correctness`, `test-hygiene`, `test-adequacy`, `documentation` as Eden with P0–P3
- *    classification), validates findings against raw workspace evidence to filter noise,
- *    reuses the exact same 6 subagent sessions via `agent_steer` across rework rounds,
- *    and publishes `.context/impl/YYMMDD-<slug>.md`.
+ * 2. Deliver (`/deliver <task>` one-shot section `<deliver>`):
+ *    Coordinator-driven implementation & quality-gate loop. Delegates coding to
+ *    `/abyss-implementer` (Elysia + `ub-mode` Phase 1: TDD, data shape first,
+ *    subtract before adding, verifiable units, action log), fans out 5 parallel
+ *    blind reviewers (`code-hygiene` with CRAP < 10 & Dryer < 0.8,
+ *    `correctness` with domain/boundary/idempotency/root-cause checks,
+ *    `test-hygiene` with behavioral test discipline, `test-adequacy` with
+ *    Mutator surviving-mutant checks, and `documentation` with domain glossary
+ *    as Eden with P0–P3 classification), validates findings against raw
+ *    workspace evidence, reuses the exact same 6 subagent sessions via
+ *    `agent_steer` across rework rounds, and publishes
+ *    `.context/impl/YYMMDD-<slug>.md`.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { resolveOneShotTask } from "../depth/index";
 
-export type AbyssWorkflow = "proposal" | "impl";
+export type OrchestratedWorkflow = "design" | "deliver";
 
-export type AbyssCommandAction =
-	| { type: "run"; workflow: AbyssWorkflow; task: string }
-	| { type: "invalid"; reason: "missing_task" | "unknown_workflow"; workflow?: AbyssWorkflow };
+export type OrchestratedCommandAction =
+	| { type: "run"; workflow: OrchestratedWorkflow; task: string }
+	| { type: "invalid"; reason: "missing_task" | "unknown_workflow"; workflow?: OrchestratedWorkflow };
 
 /** System prompt section names. Pi requires /^[a-z][a-z0-9_-]*$/ and rejects "preamble". */
-export const ABYSS_SECTION_NAMES: Record<AbyssWorkflow, string> = {
-	proposal: "proposal",
-	impl: "impl",
+export const WORKFLOW_SECTION_NAMES: Record<OrchestratedWorkflow, string> = {
+	design: "design",
+	deliver: "deliver",
 };
 
 /** EventBus discovery channel registered by `pi-subagent-manager` when active. */
@@ -62,8 +72,8 @@ export function mountSubagentManagerIfNeeded(
 }
 
 /** Canonical independent-root subagent paths (`/` prefix = shared workspace, no inherited history). */
-export const ABYSS_SUBAGENT_PATHS = {
-	proposalReviewer: "/abyss-proposal-review",
+export const SUBAGENT_PATHS = {
+	designReviewer: "/abyss-proposal-review",
 	implementer: "/abyss-implementer",
 	reviewers: {
 		codeHygiene: "/abyss-review-code-hygiene",
@@ -74,99 +84,104 @@ export const ABYSS_SUBAGENT_PATHS = {
 	},
 } as const;
 
-export interface ImplReviewAspect {
+export interface DeliverReviewAspect {
 	id: "code-hygiene" | "correctness" | "test-hygiene" | "test-adequacy" | "documentation";
 	path: string;
 	directive: string;
 }
 
-export const IMPL_REVIEW_ASPECTS: readonly ImplReviewAspect[] = [
+export const DELIVER_REVIEW_ASPECTS: readonly DeliverReviewAspect[] = [
 	{
 		id: "code-hygiene",
-		path: ABYSS_SUBAGENT_PATHS.reviewers.codeHygiene,
+		path: SUBAGENT_PATHS.reviewers.codeHygiene,
 		directive:
-			"The fixed aspect identifier is code-hygiene. Review code and logic hygiene only. Prefer deletion and simplification. Identify dead paths, duplication, unnecessary abstractions, code smells, and custom code duplicating functionality in the codebase, current dependencies, or a well-established and actively maintained library.",
+			"The fixed aspect identifier is code-hygiene. Review code and logic hygiene only. Enforce low function complexity and high coverage (every function under CRAP 10 by splitting complex branches or covering paths), eliminate structural duplication (>= 0.8 similarity so one decision lives in one place), and Subtract Before You Add (delete dead code, unnecessary abstractions, and custom code duplicating existing utilities or dependencies).",
 	},
 	{
 		id: "correctness",
-		path: ABYSS_SUBAGENT_PATHS.reviewers.correctness,
+		path: SUBAGENT_PATHS.reviewers.correctness,
 		directive:
-			"The fixed aspect identifier is correctness. Review correctness and task completion only: whether the implementation behaves correctly and fully satisfies the task, proposal, or document.",
+			"The fixed aspect identifier is correctness. Review correctness, architecture, and task completion only: verify that domain types make illegal states unrepresentable, external data is parsed once at the boundary while core logic stays pure, operations are idempotent, mutable shared state is separated or single-writer, root causes are fixed rather than hidden behind shallow guards, and the implementation fully satisfies the task or design.",
 	},
 	{
 		id: "test-hygiene",
-		path: ABYSS_SUBAGENT_PATHS.reviewers.testHygiene,
+		path: SUBAGENT_PATHS.reviewers.testHygiene,
 		directive:
-			"The fixed aspect identifier is test-hygiene. Review test hygiene only. Prefer deleting redundant, meaningless, or misleading tests, especially new tests. Identify meaningless negative checks such as 'something does not exist' and tests exhibiting the Texas sharpshooter fallacy. Recommend removal before adding or restructuring tests.",
+			"The fixed aspect identifier is test-hygiene. Review test hygiene only (Test Behavior, Not Implementation). Tests must call the code the way its user does and check user-visible outcomes. Prefer deleting redundant, meaningless, or misleading tests—especially tests that would still pass if functions returned nothing, meaningless negative checks ('something does not exist'), implementation-coupled mock tests, and Texas sharpshooter fallacies. Recommend removal before adding or restructuring tests.",
 	},
 	{
 		id: "test-adequacy",
-		path: ABYSS_SUBAGENT_PATHS.reviewers.testAdequacy,
+		path: SUBAGENT_PATHS.reviewers.testAdequacy,
 		directive:
-			"The fixed aspect identifier is test-adequacy. Review test adequacy only: whether meaningful tests sufficiently verify the task's behavior and relevant regressions.",
+			"The fixed aspect identifier is test-adequacy. Review test adequacy and mutation resilience only (cover the uncovered, kill surviving mutants). Inspect every new or modified branch, boundary, and condition to identify surviving mutants—places where altering logic or boundaries would not cause any behavioral test to fail.",
 	},
 	{
 		id: "documentation",
-		path: ABYSS_SUBAGENT_PATHS.reviewers.documentation,
+		path: SUBAGENT_PATHS.reviewers.documentation,
 		directive:
-			"The fixed aspect identifier is documentation. Review implementation documentation only: the sufficiency of notes, docstrings, comments, and documentation. Treat the proposal as implementation input; do not edit it or request changes to it as documentation.",
+			"The fixed aspect identifier is documentation. Review implementation documentation and domain glossary consistency only: verify that domain terms are used consistently and that docstrings/comments explain non-obvious 'why' decisions and invariants. Treat any input design/proposal file as read-only input; do not edit it or request changes to it as documentation.",
 	},
 ];
 
-export const PROPOSAL_PROTOCOL_RULES = [
-	"[ABYSS PROPOSAL WORKFLOW — Draft -> Clean-Slate Complexity Review -> Simplify -> Deliver]",
-	"Adopt Persona Mei throughout this workflow:",
+export const DESIGN_PROTOCOL_RULES = [
+	"[DESIGN WORKFLOW — Foundational Architecture Draft -> Clean-Slate Complexity Review -> Simplify -> Deliver]",
+	"Adopt Persona Mei + Foundational Thinking throughout this workflow:",
 	"- Research the codebase and gather concrete evidence before concluding; never start by merely agreeing with the user.",
-	"- Reason explicitly about lifecycle and ownership, underlying data storage models, and interfaces and their shapes.",
-	"- Continuously guard against overengineering and unnecessary compatibility; focus on practical intent over literal wording.",
-	"Proposal Content & Artifact Constraints:",
-	"- Focus strictly on the implementation required to satisfy the task: business logic, code changes, interfaces, data models, and infrastructure schemas only when they are part of the implementation.",
+	"- Get the data shape right before logic: reason explicitly about domain types (making illegal states unrepresentable), lifecycle and ownership, underlying data storage models, and interface shapes.",
+	"- Boundary & State Discipline: Parse external input once at the boundary and keep core business logic in pure functions; make operations idempotent; separate mutable state before serializing shared state.",
+	"- Redesign From First Principles & Subtract Before You Add: Do not bolt a new requirement onto a mismatched old design; take complexity out before adding anything; guard against overengineering and unnecessary compatibility.",
+	"Design Artifact Constraints:",
+	"- Focus strictly on the implementation required to satisfy the task: data shapes, domain models, boundaries, interfaces, and business logic.",
 	"- Do NOT add deployment plans, rollout/rollback procedures, validation/verification sections, operational runbooks, maintenance instructions, user/operator manuals, or generic checklists unless explicitly requested by the user.",
-	"- Keep the proposal artifact at `.context/proposals/YYMMDD-<slug>.md` free of modification history and unresolved questions. Change explanations belong in handoffs and user-facing delivery only.",
+	"- Keep the artifact at `.context/proposals/YYMMDD-<slug>.md` free of modification history and unresolved questions. Change explanations belong in handoffs and user-facing delivery only.",
 	"Execution Graph (orchestrate with pi-subagent-manager):",
 	"1. [Draft or Load Revision] (in /root):",
-	"   - Initial proposal (`task`): Inspect relevant files, resolve any material proposal ambiguity with the user first, and create `.context/proposals/YYMMDD-<slug>.md` (creating the directory if needed).",
-	"   - Existing proposal modification (`revision`): Read the existing proposal file and the requested edits; carry those edits forward as pending work without creating a second file.",
-	"2. [Independent Complexity Review] (clean-slate subagent `/abyss-proposal-review`, workspace: shared, history: none):",
+	"   - Initial design (`task`): Inspect relevant files, resolve any material ambiguity with the user first, and create `.context/proposals/YYMMDD-<slug>.md` (creating the directory if needed).",
+	"   - Existing design modification (`revision`): Read the existing file and the requested edits; carry those edits forward as pending work without creating a second file.",
+	`2. [Independent Complexity Review] (clean-slate subagent \`${SUBAGENT_PATHS.designReviewer}\`, workspace: shared, history: none):`,
 	"   - Call `agent_types` if needed to pick a suitable review/architect type (e.g., `reviewer` or `architect`).",
-	`   - Spawn an independent root thread via \`agent_spawn({ path: "${ABYSS_SUBAGENT_PATHS.proposalReviewer}", type: "<reviewer|architect>", task: "<handoff>" })\` (if spawned with \`wait: false\`, call \`agent_wait({ path: "${ABYSS_SUBAGENT_PATHS.proposalReviewer}" })\`).`,
+	`   - Spawn an independent root thread via \`agent_spawn({ path: "${SUBAGENT_PATHS.designReviewer}", type: "<reviewer|architect>", task: "<handoff>" })\` (if spawned with \`wait: false\`, call \`agent_wait({ path: "${SUBAGENT_PATHS.designReviewer}" })\`).`,
 	"   - Using a root path starting with `/` (not `/root/...`) is mandatory so the reviewer starts with zero inherited conversation history.",
-	"   - Instruct `/abyss-proposal-review`: read the proposal file (and any pending revision edits), review ONLY whether the proposal is overengineered, identify concrete simplifications that preserve the user's requirements, leave the proposal file unchanged, and return the concrete simplifications with reasons (or state clearly when none are needed).",
+	`   - Instruct \`${SUBAGENT_PATHS.designReviewer}\`: read the design file (and any pending revision edits), review ONLY whether the design violates Laziness Protocol ("one decision in one place, smallest edit") or is overengineered, identify concrete simplifications that preserve the user's requirements, leave the file unchanged, and return the concrete simplifications with reasons (or state clearly when none are needed).`,
 	"3. [Simplify] (in /root):",
 	"   - Evaluate the complexity review against the user's requirements. Apply pending user-requested edits (for revisions) and accepted simplifications in place to `.context/proposals/YYMMDD-<slug>.md`.",
-	`   - Clean up the reviewer session with \`agent_stop({ path: "${ABYSS_SUBAGENT_PATHS.proposalReviewer}" })\`.`,
+	`   - Clean up the reviewer session with \`agent_stop({ path: "${SUBAGENT_PATHS.designReviewer}" })\`.`,
 	"4. [Deliver] (in /root):",
-	"   - For an initial proposal: output the full final proposal text without wrapping the entire proposal in a fenced code block.",
+	"   - For an initial design: output the full final design text without wrapping the entire document in a fenced code block.",
 	"   - For a revision: output only the updated sections with a concise prose explanation of which sections changed, what changed, and why (do not output diff blocks or original-vs-modified comparisons).",
 ];
 
-export const IMPL_PROTOCOL_RULES = [
-	"[ABYSS IMPL WORKFLOW — Implementer + 5 Orthogonal Blind Reviewers + Judge Loop -> Delivery Report]",
-	"Coordinator & Ownership Rules (Persona Mei + impl-loop):",
-	"- You (`/root`) are the Coordinator and Judge. Do NOT edit implementation source or test files yourself.",
-	`- Direct exactly 1 Implementer (\`${ABYSS_SUBAGENT_PATHS.implementer}\`) and 5 independent Reviewers (\`${ABYSS_SUBAGENT_PATHS.reviewers.codeHygiene}\`, \`${ABYSS_SUBAGENT_PATHS.reviewers.correctness}\`, \`${ABYSS_SUBAGENT_PATHS.reviewers.testHygiene}\`, \`${ABYSS_SUBAGENT_PATHS.reviewers.testAdequacy}\`, \`${ABYSS_SUBAGENT_PATHS.reviewers.documentation}\`).`,
+export const DELIVER_PROTOCOL_RULES = [
+	"[DELIVER WORKFLOW — Implementer (First Make it Work) + 5 Blind Reviewers (Then Make it Right) + Judge Loop]",
+	"Coordinator & Ownership Rules (Persona Mei + Guard the Context Window):",
+	"- You (`/root`) are the Coordinator and Judge. Do NOT edit implementation source or test files yourself; keep the main thread small by delegating bulk implementation and review to subagents.",
+	`- Direct exactly 1 Implementer (\`${SUBAGENT_PATHS.implementer}\`) and 5 independent Reviewers (\`${SUBAGENT_PATHS.reviewers.codeHygiene}\`, \`${SUBAGENT_PATHS.reviewers.correctness}\`, \`${SUBAGENT_PATHS.reviewers.testHygiene}\`, \`${SUBAGENT_PATHS.reviewers.testAdequacy}\`, \`${SUBAGENT_PATHS.reviewers.documentation}\`).`,
 	"- All 6 subagents MUST use independent root paths starting with `/` (not `/root/...`) so they share the workspace (`workspace: ^`) while starting with clean, isolated conversation history (`history: none`).",
 	"- Stateful Call-Site Reuse: Create the 6 sessions with `agent_spawn` in Round 1, and REUSE those exact same 6 paths via `agent_steer` + `agent_wait` on every rework round so the Implementer and each Reviewer retain their own memory across rounds.",
 	"Execution Graph (orchestrate with pi-subagent-manager):",
-	`1. [Implement] (\`${ABYSS_SUBAGENT_PATHS.implementer}\` — Persona Elysia):`,
+	`1. [Implement] (\`${SUBAGENT_PATHS.implementer}\` — Persona Elysia + First Make it Work):`,
 	"   - Call `agent_types` once to select appropriate agent types (e.g., `coder` for implementation, `reviewer` for reviews).",
-	`   - Round 1: \`agent_spawn({ path: "${ABYSS_SUBAGENT_PATHS.implementer}", type: "coder", task: "<task + constraints + proposal/doc path + Persona Elysia instructions>" })\` (pass proposal/document file paths instead of copying their full contents).`,
-	`   - Round 2+ (Rework): \`agent_steer({ path: "${ABYSS_SUBAGENT_PATHS.implementer}", message: "<Verified Aggregate Review Report + repair scope>" })\` followed by \`agent_wait({ path: "${ABYSS_SUBAGENT_PATHS.implementer}" })\`.`,
-	"   - Instruct the Implementer: implement the requested work or repairs in the shared workspace, run appropriate checks/tests, stop editing before returning, and return a Common Review Handoff containing ONLY (a) task and constraints, (b) change explanation, (c) check commands and results, and (d) any necessary out-of-scope changes — excluding all review reports.",
-	"2. [5-Way Parallel Blind Review] (Persona Eden + impl-review + classify-priority):",
+	`   - Round 1: \`agent_spawn({ path: "${SUBAGENT_PATHS.implementer}", type: "coder", task: "<task + constraints + design/doc path + First Make it Work instructions>" })\` (pass design/document file paths instead of copying their full contents).`,
+	`   - Round 2+ (Rework): \`agent_steer({ path: "${SUBAGENT_PATHS.implementer}", message: "<Verified Aggregate Review Report + repair scope>" })\` followed by \`agent_wait({ path: "${SUBAGENT_PATHS.implementer}" })\`.`,
+	"   - Instruct the Implementer:",
+	"     * Follow First Make it Work: get data shapes & domain types right first, parse at boundaries and keep core logic pure, subtract complexity before adding, write the failing behavioral test before changing code (TDD), sequence work into small verifiable units, and fix root causes.",
+	"     * Keep a Log of every significant action and the reason for taking it.",
+	"     * Stop editing before returning, and return a Common Review Handoff containing ONLY (a) task and constraints, (b) change explanation & decision log summary, (c) check commands and results, and (d) any necessary out-of-scope changes — excluding all review reports.",
+	"2. [5-Way Parallel Blind Review] (Persona Eden + Then Make it Right + P0–P3 classification):",
 	"   - Send each of the 5 reviewers ONLY the Common Review Handoff. NEVER include another reviewer's report or the aggregate review report.",
 	"   - Round 1: Spawn all 5 reviewers concurrently with `wait: false` BEFORE calling `agent_wait` on each:",
-	...IMPL_REVIEW_ASPECTS.map((aspect) => `     * \`${aspect.path}\` (\`${aspect.id}\`): ${aspect.directive}`),
+	...DELIVER_REVIEW_ASPECTS.map((aspect) => `     * \`${aspect.path}\` (\`${aspect.id}\`): ${aspect.directive}`),
 	"   - Round 2+ (Rework): Resume all 5 existing reviewer sessions concurrently via `agent_steer({ path, message: commonReviewHandoff })` on all 5, then call `agent_wait({ path })` on all 5.",
-	"   - Instruct every reviewer: inspect the shared workspace without editing files; on rework rounds check its own prior history to state whether prior findings are resolved or open; classify each finding as P0–P3 based on verifiable impact (`P0`: severe/irreversible harm to core goal, safety/security, permissions, or data; `P1`: materially blocks core goal or delivery; `P2`: local/secondary issue; `P3`: negligible/cosmetic); order findings P0 -> P3; and return the aspect ID, explicit `PASS` or `FAILED`, and evidence-backed findings.",
-	"3. [Validate & Route] (Judge in /root — impl-validate):",
+	"   - Instruct every reviewer: inspect the shared workspace without editing files; on rework rounds check its own prior history to state whether prior findings are resolved or open; classify each finding as P0–P3 based on verifiable impact (`P0`: severe/irreversible harm to core goal, safety/security, permissions, or data; `P1`: materially blocks core goal or delivery; `P2`: local/secondary issue such as CRAP >= 10, duplication >= 0.8, surviving mutant, or implementation-coupled test; `P3`: negligible/cosmetic); order findings P0 -> P3; and return the aspect ID, explicit `PASS` or `FAILED`, and evidence-backed findings.",
+	"3. [Validate & Route] (Judge in /root — Attack the Premise & Evidence Filter):",
 	"   - Collect all 5 current-round reports (use `agent_output` if any output was truncated).",
 	"   - Verify every finding yourself against the task, constraints, check results, and actual code in the shared workspace.",
 	"   - Actively remove unsupported, irrelevant, unnecessary, overengineered, or out-of-scope findings. Merge duplicates and resolve conflicting recommendations using codebase evidence.",
+	"   - If two rework attempts that share one premise fail the same gate, identify that broken premise explicitly in the repair scope so the Implementer redesigns from first principles.",
 	"   - Build a Verified Aggregate Review Report (task, constraints, verified assessment of all 5 aspects kept distinct from raw reviewer verdicts, and retained P0–P3 findings ordered P0 -> P3 with evidence and repair scope; exclude removed findings).",
 	"   - If ANY retained actionable finding remains (`rework`): loop back to Step 1 by steering `/abyss-implementer` with the Verified Aggregate Review Report and then re-running all 5 reviewers.",
 	"   - When verification of all 5 current reports leaves ZERO retained actionable findings on the unchanged workspace implementation (`passed`): proceed to Step 4.",
-	"4. [Publish & Cleanup] (in /root — impl-delivery):",
+	"4. [Publish & Cleanup] (in /root):",
 	"   - Create `.context/impl/YYMMDD-<slug>.md` (creating the directory if needed) describing the final design and impact on callers/consumers, covering ONLY materially affected externally observable areas:",
 	"     * Interfaces and contracts (inputs, outputs, errors, compatibility)",
 	"     * Underlying data models and storage (representation, ownership, invariants)",
@@ -177,55 +192,57 @@ export const IMPL_PROTOCOL_RULES = [
 	"   - Output the full contents of `.context/impl/YYMMDD-<slug>.md` without wrapping the whole report in a fenced code block.",
 ];
 
-export function buildProposalProtocol(): string {
-	return PROPOSAL_PROTOCOL_RULES.join("\n");
+export function buildDesignProtocol(): string {
+	return DESIGN_PROTOCOL_RULES.join("\n");
 }
 
-export function buildImplProtocol(): string {
-	return IMPL_PROTOCOL_RULES.join("\n");
+export function buildDeliverProtocol(): string {
+	return DELIVER_PROTOCOL_RULES.join("\n");
 }
 
-export function buildAbyssProtocol(workflow: AbyssWorkflow): string {
-	return workflow === "proposal" ? buildProposalProtocol() : buildImplProtocol();
+export function buildOrchestratedProtocol(workflow: OrchestratedWorkflow): string {
+	return workflow === "design" ? buildDesignProtocol() : buildDeliverProtocol();
 }
 
-export interface AbyssProtocolState {
+export interface OrchestratedProtocolState {
 	/** One-shot workflow armed for the next user run, if any. */
-	oneShot: AbyssWorkflow | null;
+	oneShot: OrchestratedWorkflow | null;
 	/** Last workflow consumed by a user run, kept alive only for custom subagent wake turns. */
-	activeForCustomWake?: AbyssWorkflow | null;
+	activeForCustomWake?: OrchestratedWorkflow | null;
 	/** Message type of the starting run ("user" | "custom"). */
 	messageType?: string;
 }
 
 /**
- * Write the active Abyss workflow protocol into a system prompt `sections` map.
+ * Write the active orchestrated workflow protocol into a system prompt `sections` map.
  *
  * Returns the one-shot workflow consumed by this call so the caller can disarm
  * `oneShot`. If `messageType === "custom"` (such as a `pi-subagent` wake turn)
  * while `activeForCustomWake` is set, the section stays present for that wake
  * turn and clears on the next normal user run.
  */
-export function applyAbyssSections(
+export function applyOrchestratedSections(
 	sections: Record<string, string>,
-	state: AbyssProtocolState,
-): AbyssWorkflow | null {
-	delete sections[ABYSS_SECTION_NAMES.proposal];
-	delete sections[ABYSS_SECTION_NAMES.impl];
+	state: OrchestratedProtocolState,
+): OrchestratedWorkflow | null {
+	delete sections[WORKFLOW_SECTION_NAMES.design];
+	delete sections[WORKFLOW_SECTION_NAMES.deliver];
 
 	if (state.oneShot) {
-		sections[ABYSS_SECTION_NAMES[state.oneShot]] = buildAbyssProtocol(state.oneShot);
+		sections[WORKFLOW_SECTION_NAMES[state.oneShot]] = buildOrchestratedProtocol(state.oneShot);
 		return state.oneShot;
 	}
 
 	if (state.messageType === "custom" && state.activeForCustomWake) {
-		sections[ABYSS_SECTION_NAMES[state.activeForCustomWake]] = buildAbyssProtocol(state.activeForCustomWake);
+		sections[WORKFLOW_SECTION_NAMES[state.activeForCustomWake]] = buildOrchestratedProtocol(
+			state.activeForCustomWake,
+		);
 	}
 
 	return null;
 }
 
-export function parseAbyssCommandArgs(argsRaw: string, editorText = ""): AbyssCommandAction {
+export function parseOrchestratedCommandArgs(argsRaw: string, editorText = ""): OrchestratedCommandAction {
 	const trimmed = argsRaw.trim();
 	const match = trimmed.match(/^(\S+)(?:\s+([\s\S]*))?$/);
 	if (!match) {
@@ -235,7 +252,7 @@ export function parseAbyssCommandArgs(argsRaw: string, editorText = ""): AbyssCo
 	const subcommand = match[1].toLowerCase().replace(/^workflow:/, "");
 	const remainder = match[2] ?? "";
 
-	if (subcommand !== "proposal" && subcommand !== "impl") {
+	if (subcommand !== "design" && subcommand !== "deliver") {
 		return { type: "invalid", reason: "unknown_workflow" };
 	}
 
@@ -247,9 +264,9 @@ export function parseAbyssCommandArgs(argsRaw: string, editorText = ""): AbyssCo
 	return { type: "run", workflow: subcommand, task: resolved.task };
 }
 
-export default function abyssExtension(pi: ExtensionAPI): void {
-	let pendingOneShot: AbyssWorkflow | null = null;
-	let activeForCustomWake: AbyssWorkflow | null = null;
+export default function orchestratedWorkflowsExtension(pi: ExtensionAPI): void {
+	let pendingOneShot: OrchestratedWorkflow | null = null;
+	let activeForCustomWake: OrchestratedWorkflow | null = null;
 
 	function dispatchUserTask(ctx: ExtensionContext, task: string): void {
 		if (ctx.isIdle()) {
@@ -259,7 +276,7 @@ export default function abyssExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function triggerWorkflow(workflow: AbyssWorkflow, args: string, ctx: ExtensionContext): void {
+	function triggerWorkflow(workflow: OrchestratedWorkflow, args: string, ctx: ExtensionContext): void {
 		const editorDraft = typeof ctx.ui?.getEditorText === "function" ? ctx.ui.getEditorText() : "";
 		const resolved = resolveOneShotTask(args, editorDraft);
 
@@ -280,7 +297,7 @@ export default function abyssExtension(pi: ExtensionAPI): void {
 		const sections = event.systemPromptOptions.sections;
 		const messageType = (event as any)?.messageType;
 
-		const consumed = applyAbyssSections(sections, {
+		const consumed = applyOrchestratedSections(sections, {
 			oneShot: pendingOneShot,
 			activeForCustomWake,
 			messageType,
@@ -294,47 +311,19 @@ export default function abyssExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.registerCommand("proposal", {
+	pi.registerCommand("design", {
 		description:
-			"Run Abyss proposal workflow (draft .context/proposals/YYMMDD-<slug>.md -> clean-slate complexity review -> simplify -> deliver)",
+			"Draft an architecture/design proposal (.context/proposals/YYMMDD-<slug>.md) with a clean-slate subagent complexity review",
 		handler: async (args, ctx) => {
-			triggerWorkflow("proposal", args, ctx);
+			triggerWorkflow("design", args, ctx);
 		},
 	});
 
-	pi.registerCommand("impl", {
+	pi.registerCommand("deliver", {
 		description:
-			"Run Abyss impl workflow (implementer + 5 parallel blind reviewers + judge validation loop -> .context/impl/YYMMDD-<slug>.md)",
+			"Deliver a feature or design via 1 TDD implementer + 5 parallel blind reviewers (CRAP, Dryer, Mutator, behavioral tests) -> .context/impl/YYMMDD-<slug>.md",
 		handler: async (args, ctx) => {
-			triggerWorkflow("impl", args, ctx);
-		},
-	});
-
-	pi.registerCommand("abyss", {
-		description: "Run an Abyss workflow: `/abyss proposal <task>` or `/abyss impl <task>`",
-		handler: async (args, ctx) => {
-			const editorDraft = typeof ctx.ui?.getEditorText === "function" ? ctx.ui.getEditorText() : "";
-			const action = parseAbyssCommandArgs(args, editorDraft);
-
-			if (action.type === "invalid") {
-				if (action.reason === "missing_task" && action.workflow) {
-					ctx.ui.notify(
-						`Usage: /abyss ${action.workflow} <task> (or type a draft in the editor first)`,
-						"warning",
-					);
-				} else {
-					ctx.ui.notify("Usage: /abyss <proposal|impl> <task>", "warning");
-				}
-				return;
-			}
-
-			const inlineRemainder = args.trim().replace(/^\S+\s*/, "");
-			if (!inlineRemainder.trim() && editorDraft.trim() && typeof ctx.ui?.setEditorText === "function") {
-				ctx.ui.setEditorText("");
-			}
-
-			pendingOneShot = action.workflow;
-			dispatchUserTask(ctx, action.task);
+			triggerWorkflow("deliver", args, ctx);
 		},
 	});
 }

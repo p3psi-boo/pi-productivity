@@ -1,7 +1,7 @@
 {
   "name": "pi-productivity",
   "version": "0.1.0",
-  "description": "Pi extensions for ambitious human-model collaboration (Depth, Breadth, Horizon) and Abyss multi-session subagent orchestration (Proposal, Impl)",
+  "description": "Scenario-driven Pi workflows: persistent Debug & TDD modes, Explore/Drive/Refactor solo commands, and Design/Deliver multi-agent subagent orchestration",
   "license": "MIT",
   "type": "module",
   "repository": {
